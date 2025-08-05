@@ -1,4 +1,6 @@
-// Import Express.js
+// 🚀 BOT DE COMPROBANTES - META WHATSAPP API
+// Migración completa desde Baileys
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const fetch = require('node-fetch');
@@ -8,9 +10,20 @@ const vision = require('@google-cloud/vision');
 const OpenAI = require('openai');
 const fuzz = require('fuzzball');
 
+// Importar módulos del bot migrado
+const { 
+  STATES, 
+  setUserState, 
+  getUserState, 
+  clearUserState, 
+  sendMessage, 
+  processInitialMessage 
+} = require('./bot-core');
+const { handleConversationalFlow } = require('./conversational-flow');
+
 require('dotenv').config();
 
-console.log('🚀 Iniciando aplicación...');
+console.log('🚀 Iniciando Bot de Comprobantes (Meta WhatsApp API)...');
 console.log('📍 Variables de entorno detectadas:');
 console.log('- PORT:', process.env.PORT || '3000 (default)');
 console.log('- SUPABASE_URL:', process.env.SUPABASE_URL ? '✅ Configurada' : '❌ No configurada');
@@ -41,8 +54,21 @@ for (const envVar of requiredEnvVars) {
 // Configurar Google Cloud Vision
 console.log('🔧 Configurando Google Cloud Vision...');
 let gcvClient;
-if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
-  console.log('📄 Usando credenciales JSON desde variable de entorno');
+if (process.env.GOOGLE_CLOUD_CREDENTIALS) {
+  console.log('📄 Usando credenciales JSON desde variable de entorno (PRODUCCIÓN)');
+  try {
+    const credentials = JSON.parse(process.env.GOOGLE_CLOUD_CREDENTIALS);
+    gcvClient = new vision.ImageAnnotatorClient({
+      credentials: credentials,
+      projectId: credentials.project_id
+    });
+    console.log('✅ Google Cloud Vision configurado exitosamente (JSON)');
+  } catch (error) {
+    console.error('❌ Error parseando credenciales JSON:', error.message);
+    gcvClient = null;
+  }
+} else if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+  console.log('📄 Usando credenciales JSON desde variable de entorno (FALLBACK)');
   try {
     const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
     gcvClient = new vision.ImageAnnotatorClient({
@@ -55,7 +81,7 @@ if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
     gcvClient = null;
   }
 } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-  console.log('📁 Usando archivo de credenciales local');
+  console.log('📁 Usando archivo de credenciales local (DESARROLLO)');
   try {
     gcvClient = new vision.ImageAnnotatorClient();
     console.log('✅ Google Cloud Vision configurado exitosamente (archivo)');
@@ -65,6 +91,8 @@ if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
   }
 } else {
   console.warn('⚠️  Google Cloud Vision no configurado - OCR no funcionará');
+  console.warn('💡 En producción: configura GOOGLE_CLOUD_CREDENTIALS en Render');
+  console.warn('💡 En desarrollo: configura GOOGLE_APPLICATION_CREDENTIALS');
   gcvClient = null;
 }
 console.log('🤖 Configurando OpenAI...');
@@ -146,7 +174,7 @@ app.post('/test-webhook', (req, res) => {
   res.json({ status: 'received', body: req.body });
 });
 
-// Route for POST requests
+// Route for POST requests - WEBHOOK PRINCIPAL CON SISTEMA CONVERSACIONAL
 app.post('/webhook', async (req, res) => {
   console.log('📨 POST request recibido en /webhook');
   console.log('Headers:', req.headers);
@@ -177,229 +205,39 @@ app.post('/webhook', async (req, res) => {
           }
           
           if (!msgObj) {
-            console.log('⏭️  Saltando - no hay mensaje');
+            console.log('⏭️ Saltando - no hay mensaje');
             continue;
           }
 
-          console.log('🔍 Extrayendo datos del mensaje...');
-          // Extraer datos
+          // ============================================================================
+          // 🎯 SISTEMA CONVERSACIONAL PRINCIPAL (MIGRADO DESDE BAILEYS)
+          // ============================================================================
+
+          console.log('🔍 Iniciando procesamiento conversacional...');
+          
           const from = msgObj.from;
           const msgId = msgObj.id;
           const type = msgObj.type;
-          let caption = msgObj.text?.body || msgObj.image?.caption;
           
-          console.log('📋 Datos extraídos:');
+          console.log('📋 Datos básicos del mensaje:');
           console.log('- From:', from);
           console.log('- Message ID:', msgId);
           console.log('- Type:', type);
-          console.log('- Caption/Text:', caption);
-          
-          let imageUrl;
-          
-          if (type === 'image') {
-            console.log('🖼️  Procesando imagen...');
-            try {
-              // Obtener media URL de Meta
-              const mediaId = msgObj.image.id;
-              console.log('📷 Media ID:', mediaId);
-              
-              console.log('🔗 Obteniendo URL de imagen desde Meta...');
-              const mediaRes = await fetch(
-                `https://graph.facebook.com/v15.0/${mediaId}`,
-                { headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}` } }
-              );
-              
-              console.log('📡 Response status:', mediaRes.status);
-              const mediaJson = await mediaRes.json();
-              console.log('📄 Media response:', JSON.stringify(mediaJson, null, 2));
-              
-              if (!mediaJson.url) {
-                throw new Error('No se pudo obtener la URL de la imagen');
-              }
-              
-              console.log('⬇️  Descargando imagen desde:', mediaJson.url);
-              // Descargar la imagen
-              const urlRes = await fetch(mediaJson.url, {
-                headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}` }
-              });
-              
-              console.log('📡 Download status:', urlRes.status);
-              console.log('📐 Content-Type:', urlRes.headers.get('content-type'));
-              console.log('📏 Content-Length:', urlRes.headers.get('content-length'));
-              
-              const buffer = await urlRes.arrayBuffer();
-              imageUrl = Buffer.from(buffer);
-              console.log('✅ Imagen descargada exitosamente, tamaño:', imageUrl.length, 'bytes');
-            } catch (error) {
-              console.error('❌ Error procesando imagen:', error.message);
-              console.error('Stack trace:', error.stack);
-              continue;
-            }
-          }
 
-          console.log('🔍 Iniciando procesamiento OCR...');
-          // 3) Procesar OCR si es imagen
-          let ocrText = caption || '';
-          console.log('📝 Texto inicial (caption):', ocrText);
-          
-          if (type === 'image' && imageUrl && gcvClient) {
-            console.log('🤖 Ejecutando OCR con Google Cloud Vision...');
-            try {
-              const [result] = await gcvClient.documentTextDetection(imageUrl);
-              console.log('📄 OCR result object keys:', Object.keys(result));
-              console.log('📋 Full text annotation:', !!result.fullTextAnnotation);
-              
-              ocrText = result.fullTextAnnotation?.text || '';
-              console.log('✅ OCR completado exitosamente');
-              console.log('📝 Texto extraído (', ocrText.length, 'caracteres):', ocrText.substring(0, 200) + (ocrText.length > 200 ? '...' : ''));
-            } catch (error) {
-              console.error('❌ Error en OCR:', error.message);
-              console.error('Stack trace:', error.stack);
-              ocrText = 'Error procesando imagen';
-            }
+          // Obtener estado actual del usuario
+          const userState = getUserState(from);
+          console.log('� Estado actual del usuario:', userState.state);
+
+          // Procesar según tipo de mensaje y estado
+          if (userState.state === STATES.IDLE) {
+            // Usuario no tiene flujo activo - procesar nuevo comprobante
+            await handleNewComprobante(from, msgObj, msgId);
           } else {
-            console.log('⏭️  Saltando OCR:');
-            console.log('- Es imagen:', type === 'image');
-            console.log('- Tiene imageUrl:', !!imageUrl);
-            console.log('- GCV Client disponible:', !!gcvClient);
-          }
-
-          console.log('🤖 Iniciando análisis con OpenAI...');
-          // 4) Analizar con OpenAI (por ejemplo extraer campos)
-          let parsed = '';
-          try {
-            const aiPrompt = `Extrae monto, fecha, proveedor de este texto: ${ocrText}`;
-            console.log('💭 Prompt enviado a OpenAI:', aiPrompt.substring(0, 150) + '...');
-            
-            const aiRes = await openai.completions.create({
-              model: 'gpt-3.5-turbo-instruct', 
-              prompt: aiPrompt, 
-              max_tokens: 200
-            });
-            
-            console.log('📥 Respuesta de OpenAI recibida');
-            console.log('🔢 Choices count:', aiRes.choices?.length || 0);
-            
-            parsed = aiRes.choices[0].text.trim();
-            console.log('✅ Análisis de OpenAI completado');
-            console.log('📝 Texto parseado:', parsed);
-          } catch (error) {
-            console.error('❌ Error con OpenAI:', error.message);
-            console.error('Stack trace:', error.stack);
-            parsed = 'Error analizando texto';
-          }
-
-          console.log('🔍 Iniciando matching de proveedores...');
-          // 5) Matching proveedor con fuzzball
-          let match = { score: 0, item: null };
-          try {
-            console.log('📊 Consultando proveedores en Supabase...');
-            const { data: proveedores, error } = await supabase.from('proveedores').select('id,nombre');
-            
-            if (error) {
-              console.error('❌ Error en consulta Supabase:', error);
-              throw error;
-            }
-            
-            console.log('📋 Proveedores encontrados:', proveedores?.length || 0);
-            if (proveedores) {
-              console.log('👥 Lista de proveedores:', proveedores.map(p => p.nombre));
-            }
-            
-            if (proveedores && proveedores.length > 0) {
-              console.log('🔎 Ejecutando fuzzy matching...');
-              for (const prov of proveedores) {
-                const score = fuzz.ratio(parsed, prov.nombre);
-                console.log(`📊 Score para "${prov.nombre}": ${score}%`);
-                if (score > match.score) {
-                  match = { score, item: prov };
-                  console.log(`🎯 Nuevo mejor match: ${prov.nombre} (${score}%)`);
-                }
-              }
-            } else {
-              console.log('📭 No hay proveedores en la base de datos');
-            }
-            
-            console.log('🏆 Match final:', match.item ? `${match.item.nombre} (${match.score}%)` : 'Sin match');
-          } catch (error) {
-            console.error('❌ Error consultando proveedores:', error.message);
-            console.error('Stack trace:', error.stack);
-          }
-
-          console.log('💾 Guardando en Supabase...');
-          // 6) Guardar en Supabase
-          try {
-            const recordData = {
-              id: uuidv4(),
-              from,            
-              raw_text: ocrText,
-              parsed_text: parsed,
-              proveedor_id: match.item?.id || null,
-              score: match.score,
-              timestamp: new Date()
-            };
-            
-            console.log('📝 Datos a guardar:', JSON.stringify(recordData, null, 2));
-            
-            const { error } = await supabase.from('comprobantes').insert(recordData);
-            
-            if (error) {
-              console.error('❌ Error específico de Supabase:', error);
-              throw error;
-            }
-            
-            console.log('✅ Registro guardado exitosamente en Supabase');
-          } catch (error) {
-            console.error('❌ Error guardando en Supabase:', error.message);
-            console.error('Stack trace:', error.stack);
-          }
-
-          console.log('📱 Enviando respuesta a WhatsApp...');
-          // 7) Enviar respuesta al cliente
-          try {
-            const replyText = match.item
-              ? `Registrado: ${match.item.nombre} (${match.score}% coincidencia)`
-              : `No encontré proveedor. Guardé el comprobante para revisión.`;
-            
-            console.log('💬 Mensaje a enviar:', replyText);
-            console.log('📞 Enviando a:', from);
-            console.log('📱 Phone ID:', process.env.META_PHONE_ID);
-            
-            const messagePayload = {
-              messaging_product: 'whatsapp',
-              to: from,
-              text: { body: replyText }
-            };
-            
-            console.log('📦 Payload completo:', JSON.stringify(messagePayload, null, 2));
-            
-            const response = await fetch(
-              `https://graph.facebook.com/v15.0/${process.env.META_PHONE_ID}/messages`,
-              {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}`
-                },
-                body: JSON.stringify(messagePayload)
-              }
-            );
-            
-            console.log('📡 Response status:', response.status);
-            const responseText = await response.text();
-            console.log('📄 Response body:', responseText);
-            
-            if (!response.ok) {
-              throw new Error(`HTTP ${response.status}: ${responseText}`);
-            }
-            
-            console.log('✅ Respuesta enviada exitosamente');
-          } catch (error) {
-            console.error('❌ Error enviando respuesta:', error.message);
-            console.error('Stack trace:', error.stack);
+            // Usuario tiene flujo activo - continuar conversación
+            await handleActiveFlow(from, msgObj, msgId, userState);
           }
           
-          console.log('🔄 Finalizando procesamiento del mensaje');
+          console.log('� Finalizando procesamiento del mensaje');
         }
         console.log('✅ Entry procesado completamente');
       }
@@ -417,18 +255,158 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+// ============================================================================
+// 🎯 FUNCIONES DE PROCESAMIENTO DE MENSAJES (MIGRADAS DESDE BAILEYS)
+// ============================================================================
+
+const handleNewComprobante = async (phoneNumber, msgObj, messageId) => {
+  try {
+    console.log('🆕 Procesando nuevo comprobante...');
+    
+    let captureMessage = '';
+    const type = msgObj.type;
+    
+    // Extraer contenido según tipo de mensaje
+    if (type === 'text') {
+      captureMessage = msgObj.text?.body || '';
+      console.log('📝 Mensaje de texto:', captureMessage);
+      
+    } else if (type === 'image') {
+      console.log('🖼️ Procesando imagen...');
+      
+      const caption = msgObj.image?.caption || '';
+      let ocrText = '';
+      
+      try {
+        // Obtener media URL de Meta
+        const mediaId = msgObj.image.id;
+        console.log('📷 Media ID:', mediaId);
+        
+        const mediaRes = await fetch(
+          `https://graph.facebook.com/v15.0/${mediaId}`,
+          { headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}` } }
+        );
+        
+        const mediaJson = await mediaRes.json();
+        console.log('� Media response:', JSON.stringify(mediaJson, null, 2));
+        
+        if (mediaJson.url) {
+          // Descargar la imagen
+          const urlRes = await fetch(mediaJson.url, {
+            headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}` }
+          });
+          
+          const buffer = await urlRes.arrayBuffer();
+          const imageBuffer = Buffer.from(buffer);
+          console.log('✅ Imagen descargada, tamaño:', imageBuffer.length, 'bytes');
+          
+          // Procesar OCR si Google Vision está disponible
+          if (gcvClient) {
+            console.log('🤖 Ejecutando OCR...');
+            const [result] = await gcvClient.documentTextDetection(imageBuffer);
+            ocrText = result.fullTextAnnotation?.text || '';
+            console.log('� Texto OCR extraído:', ocrText.substring(0, 200) + '...');
+          }
+        }
+      } catch (error) {
+        console.error('❌ Error procesando imagen:', error.message);
+      }
+      
+      // Combinar caption y OCR
+      captureMessage = [caption, ocrText].filter(Boolean).join('\n\n');
+      
+    } else if (type === 'document') {
+      console.log('� Procesando documento...');
+      
+      const caption = msgObj.document?.caption || '';
+      const fileName = msgObj.document?.filename || 'documento';
+      
+      // Por ahora solo usar el caption, podrías implementar descarga de PDF
+      captureMessage = `${caption}\n\n[Documento recibido: ${fileName}]`;
+      
+    } else {
+      console.log('❓ Tipo de mensaje no soportado:', type);
+      await sendMessage(
+        phoneNumber, 
+        "❓ Por favor envía una imagen, documento o texto con el comprobante.",
+        messageId
+      );
+      return;
+    }
+    
+    // Procesar con IA si hay contenido
+    if (captureMessage.trim()) {
+      console.log('🧠 Enviando a procesamiento inteligente...');
+      console.log('� Contenido a procesar:', captureMessage.substring(0, 300) + '...');
+      
+      await processInitialMessage(phoneNumber, captureMessage, messageId);
+    } else {
+      await sendMessage(
+        phoneNumber,
+        "❓ No pude extraer información del mensaje. ¿Podrías enviar más detalles?",
+        messageId
+      );
+    }
+    
+  } catch (error) {
+    console.error('❌ Error procesando nuevo comprobante:', error.message);
+    await sendMessage(phoneNumber, "❌ Error procesando el comprobante. Intenta nuevamente.", messageId);
+  }
+};
+
+const handleActiveFlow = async (phoneNumber, msgObj, messageId, userState) => {
+  try {
+    console.log('� Continuando flujo activo:', userState.state);
+    
+    // Extraer texto del mensaje
+    let userInput = '';
+    
+    if (msgObj.type === 'text') {
+      userInput = msgObj.text?.body || '';
+    } else {
+      // Si está en flujo activo pero envía algo que no es texto
+      await sendMessage(
+        phoneNumber,
+        "⚠️ Tienes un flujo activo. Por favor responde con texto a la pregunta anterior.",
+        messageId
+      );
+      return;
+    }
+    
+    console.log('� Input del usuario:', userInput);
+    
+    // Delegar al sistema conversacional
+    await handleConversationalFlow(phoneNumber, userInput, messageId);
+    
+  } catch (error) {
+    console.error('❌ Error en flujo activo:', error.message);
+    await sendMessage(phoneNumber, "❌ Error procesando tu respuesta. Intenta nuevamente.", messageId);
+  }
+};
+
 // Start the server
 app.listen(port, () => {  
-  console.log(`\n🚀 Servidor iniciado exitosamente!`);
+  console.log(`\n🚀 Bot de Comprobantes iniciado exitosamente!`);
   console.log(`📍 Puerto: ${port}`);
   console.log(`🌐 URL local: http://localhost:${port}`);
   console.log(`📋 Endpoints disponibles:`);
   console.log(`   GET  / - Verificación de webhook`);
-  console.log(`   POST /webhook - Recepción de mensajes`);
+  console.log(`   GET  /test - Test de conectividad`);
+  console.log(`   POST /webhook - Recepción de mensajes (PRINCIPAL)`);
+  console.log(`   POST /test-webhook - Test de webhook`);
   console.log(`🔧 Configuración:`);
   console.log(`   - Supabase: ${process.env.SUPABASE_URL ? '✅' : '❌'}`);
   console.log(`   - OpenAI: ${process.env.OPENAI_API_KEY ? '✅' : '❌'}`);
   console.log(`   - Google Vision: ${gcvClient ? '✅' : '❌'}`);
   console.log(`   - Meta WhatsApp: ${process.env.META_ACCESS_TOKEN ? '✅' : '❌'}`);
-  console.log(`\n🎉 ¡Listo para recibir mensajes de WhatsApp!\n`);
+  console.log(`\n� SISTEMA CONVERSACIONAL MIGRADO DESDE BAILEYS:`);
+  console.log(`   - ✅ Manejo de estados persistente`);
+  console.log(`   - ✅ Flujo conversacional completo`);
+  console.log(`   - ✅ OCR de imágenes y documentos`);
+  console.log(`   - ✅ Análisis inteligente con OpenAI`);
+  console.log(`   - ✅ Matching de destinatarios con Fuzzball`);
+  console.log(`   - ✅ Gestión de métodos de pago`);
+  console.log(`   - ✅ Confirmación y modificación de datos`);
+  console.log(`   - ✅ Guardado en Supabase`);
+  console.log(`\n🎉 ¡Bot listo para recibir comprobantes de pago!\n`);
 });
