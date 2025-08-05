@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -10,7 +12,14 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@google-cloud/vision": "^5.3.3",
+    "@supabase/supabase-js": "^2.53.0",
+    "body-parser": "^2.2.0",
     "dotenv": "^17.2.0",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "fuzzball": "^2.2.2",
+    "node-fetch": "^3.3.2",
+    "openai": "^5.12.0",
+    "uuid": "^11.1.0"
   }
 }
