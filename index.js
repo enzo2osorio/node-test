@@ -77,6 +77,22 @@ console.log('🌐 Configurando Express...');
 const app = express();
 app.use(bodyParser.json());
 app.use(express.json());
+
+// Middleware para logging de todas las peticiones
+app.use((req, res, next) => {
+  console.log('\n=== NUEVA PETICIÓN ===');
+  console.log('🌐 Método:', req.method);
+  console.log('📍 URL:', req.url);
+  console.log('📋 Headers:', JSON.stringify(req.headers, null, 2));
+  console.log('🔗 IP:', req.ip || req.connection.remoteAddress);
+  console.log('⏰ Timestamp:', new Date().toISOString());
+  if (req.body && Object.keys(req.body).length > 0) {
+    console.log('📦 Body:', JSON.stringify(req.body, null, 2));
+  }
+  console.log('========================\n');
+  next();
+});
+
 console.log('✅ Express configurado exitosamente');
 
 // Set port and verify_token
@@ -104,6 +120,30 @@ app.get('/', (req, res) => {
     console.log(`Mode: ${mode}, Token match: ${token === verifyToken}`);
     res.status(403).end();
   }
+});
+
+// Endpoint de prueba para verificar conectividad
+app.get('/test', (req, res) => {
+  console.log('🧪 Test endpoint llamado');
+  res.json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    message: 'Servidor funcionando correctamente',
+    config: {
+      supabase: !!process.env.SUPABASE_URL,
+      openai: !!process.env.OPENAI_API_KEY,
+      googleVision: !!gcvClient,
+      metaWhatsApp: !!process.env.META_ACCESS_TOKEN,
+      verifyToken: !!process.env.VERIFY_TOKEN
+    }
+  });
+});
+
+// Endpoint para simular webhook (para testing)
+app.post('/test-webhook', (req, res) => {
+  console.log('🧪 Test webhook llamado');
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  res.json({ status: 'received', body: req.body });
 });
 
 // Route for POST requests
